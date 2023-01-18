@@ -298,18 +298,18 @@ func (m *Multicast) startIPv4(intf *multicastInterface) {
 	groupAddrPort := fmt.Sprintf("%s:%d", MulticastIPv4GroupAddr, MulticastGroupPort)
 	addr, err := net.ResolveUDPAddr("udp4", groupAddrPort)
 	if err != nil {
-		//m.log.Printf("net.ResolveUDPAddr (%s): %s, ignoring interface\n", intf.Name, err)
+		// m.log.Printf("net.ResolveUDPAddr (%s): %s, ignoring interface\n", intf.Name, err)
 		return
 	}
 	listenString := fmt.Sprintf("0.0.0.0:%d", MulticastGroupPort)
 	conn, err := m.udpLC.ListenPacket(m.ctx, "udp4", listenString)
 	if err != nil {
-		//m.log.Printf("lc.ListenPacket (%s): %s, ignoring interface\n", intf.Name, err)
+		// m.log.Printf("lc.ListenPacket (%s): %s, ignoring interface\n", intf.Name, err)
 		return
 	}
 	sock := ipv4.NewPacketConn(conn)
 	if err := sock.JoinGroup(&intf.Interface, addr); err != nil {
-		//m.log.Printf("sock.JoinGroup (%s): %s, ignoring interface\n", intf.Name, err)
+		// m.log.Printf("sock.JoinGroup (%s): %s, ignoring interface\n", intf.Name, err)
 		return
 	}
 	addr.Zone = intf.Name
@@ -344,11 +344,12 @@ func (m *Multicast) startIPv4(intf *multicastInterface) {
 		break
 	}
 	if srcaddr == nil {
+		// m.log.Println("No valid srcaddr found for iface", intf.Name)
 		return
 	}
 	m.log.Printf("Multicast discovery enabled on %s (%s)\n", intf.Name, srcaddr.String())
 	m.interfaces.Store(intf.Name, intf)
-	go m.advertise(intf, conn, addr)
+	go m.advertise(intf, conn, addr, srcaddr)
 	go m.listen(intf, conn, &net.TCPAddr{
 		IP:   srcaddr,
 		Zone: addr.Zone,
@@ -409,16 +410,16 @@ func (m *Multicast) startIPv6(intf *multicastInterface) {
 	}
 	m.log.Printf("Multicast discovery enabled on %s (%s)\n", intf.Name, srcaddr.String())
 	m.interfaces.Store(intf.Name, intf)
-	go m.advertise(intf, conn, addr)
+	go m.advertise(intf, conn, addr, nil)
 	go m.listen(intf, conn, &net.TCPAddr{
 		IP:   srcaddr,
 		Zone: addr.Zone,
 	})
 }
 
-func (m *Multicast) advertise(intf *multicastInterface, conn net.PacketConn, addr net.Addr) {
+func (m *Multicast) advertise(intf *multicastInterface, conn net.PacketConn, addr net.Addr, srcaddr net.IP) {
 	defer m.interfaces.Delete(intf.Name)
-	//defer m.log.Println("Stop advertising on", intf.Name)
+	// defer m.log.Println("Stop advertising on", intf.Name)
 	tcpaddr, _ := m.listener.Addr().(*net.TCPAddr)
 	portBytes := make([]byte, 2)
 	binary.BigEndian.PutUint16(portBytes, uint16(tcpaddr.Port))
@@ -426,6 +427,12 @@ func (m *Multicast) advertise(intf *multicastInterface, conn net.PacketConn, add
 	first := make(chan struct{}, 1)
 	first <- struct{}{}
 	ourPublicKey := m.r.PublicKey()
+
+	if srcaddr != nil {
+		portBytes = append(portBytes, srcaddr.To4()...)
+		m.log.Println("This Pinecone supports adding IPv4 address at the end of Multicast.")
+	}
+
 	for {
 		select {
 		case <-m.ctx.Done():
@@ -448,7 +455,7 @@ func (m *Multicast) advertise(intf *multicastInterface, conn net.PacketConn, add
 
 func (m *Multicast) listen(intf *multicastInterface, conn net.PacketConn, srcaddr net.Addr) {
 	defer m.interfaces.Delete(intf.Name)
-	//defer m.log.Println("Stop listening on", intf.Name)
+	// defer m.log.Println("Stop listening on", intf.Name)
 	dialer := m.dialer
 	dialer.LocalAddr = srcaddr
 	dialer.Control = m.tcpOptions
@@ -468,7 +475,7 @@ func (m *Multicast) listen(intf *multicastInterface, conn net.PacketConn, srcadd
 
 		n, addr, err := conn.ReadFrom(buf)
 		if err != nil || n < ed25519.PublicKeySize+2 {
-			//m.log.Println("conn.ReadFrom:", err)
+			// m.log.Println("conn.ReadFrom:", err)
 			intf.cancel()
 			continue
 		}
@@ -485,6 +492,10 @@ func (m *Multicast) listen(intf *multicastInterface, conn net.PacketConn, srcadd
 
 		if m.r.IsConnected(neighborKey, udpaddr.Zone) {
 			continue
+		}
+
+		if n == ed25519.PublicKeySize+6 { // 2bytes for port and 4 bytes for IPv4 address
+			udpaddr.IP = buf[ed25519.PublicKeySize+2 : ed25519.PublicKeySize+6]
 		}
 
 		tcpaddr := &net.TCPAddr{
@@ -507,7 +518,7 @@ func (m *Multicast) listen(intf *multicastInterface, conn net.PacketConn, srcadd
 
 			conn, err := dialer.Dial("tcp", straddr)
 			if err != nil {
-				//m.log.Println("dialer.Dial:", err)
+				// m.log.Println("dialer.Dial:", err)
 				return
 			}
 
