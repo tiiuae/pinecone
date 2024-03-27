@@ -31,7 +31,10 @@ import (
 	"golang.org/x/net/ipv6"
 )
 
-const MulticastIPv4GroupAddr = "224.0.0.114"
+// Link local address is not routable
+// const MulticastIPv4GroupAddr = "224.0.0.114"
+// 239.0.0.114 is routable mcast address
+const MulticastIPv4GroupAddr = "239.0.0.114"
 const MulticastIPv6GroupAddr = "[ff02::114]"
 const MulticastGroupPort = 60606
 
@@ -86,7 +89,8 @@ func (m *Multicast) Start() {
 	m.ctx, m.cancel = context.WithCancel(context.Background())
 
 	var err error
-	m.listener, err = m.tcpLC.Listen(m.ctx, "tcp", "[::]:0")
+	// 49000 is a special port which is allowed by ghaf firewall
+	m.listener, err = m.tcpLC.Listen(m.ctx, "tcp", "[::]:49000")
 	if err != nil {
 		panic(err)
 	}
